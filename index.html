@@ -2,12 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>OBJ Viewer</title>
+    <title>3D Audio-Reactive Visualizer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       body {
         margin: 0;
-        background-color: white;
+        background-color: #111; /* Dark background for better visuals */
         overflow: hidden;
       }
       canvas {
@@ -16,6 +16,8 @@
     </style>
   </head>
   <body>
+    <!-- The file input is now triggered from the GUI, but we still need the element -->
+    <input type="file" id="audio-file-input" accept="audio/*" style="display: none;" />
     <script type="module" src="/main.js"></script>
   </body>
 </html>
