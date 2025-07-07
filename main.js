@@ -52,15 +52,9 @@ const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
 directionalLight.position.set(5, 10, 7.5);
 scene.add(directionalLight);
 
-// -- Controls & Idle Rotation --
+// -- Controls Setup --
 let controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-
-let lastInteractionTime = Date.now();
-controls.addEventListener('start', () => { lastInteractionTime = Date.now(); });
-document.addEventListener('mousedown', () => { lastInteractionTime = Date.now(); });
-document.addEventListener('touchstart', () => { lastInteractionTime = Date.now(); });
-
+controls.enableDamping = false; // Disables camera inertia
 
 // -- Audio Setup --
 let audioCtx, analyser, sourceNode, frequencyData, audio;
@@ -110,16 +104,25 @@ gltfLoader.load('/models/model.glb', (gltf) => {
     scene.add(object);
 }, undefined, (err) => console.error("Error loading .glb file:", err));
 
-// -- GUI Setup --
+// -- GUI Setup & Toggle Functions --
 const gui = new GUI();
 
 const renderSettings = { useAscii: false };
-gui.add(renderSettings, 'useAscii').name('Enable ASCII Render').onChange(val => {
-    renderer.domElement.style.display = val ? 'none' : 'block';
-    effect.domElement.style.display = val ? 'block' : 'none';
+
+function toggleAsciiRender() {
+    renderSettings.useAscii = !renderSettings.useAscii;
+    
+    renderer.domElement.style.display = renderSettings.useAscii ? 'none' : 'block';
+    effect.domElement.style.display = renderSettings.useAscii ? 'block' : 'none';
+    
     controls.dispose();
-    controls = new OrbitControls(camera, val ? effect.domElement : renderer.domElement);
-});
+    controls = new OrbitControls(camera, renderSettings.useAscii ? effect.domElement : renderer.domElement);
+    controls.enableDamping = false;
+    
+    gui.controllers[0].updateDisplay();
+}
+
+gui.add(renderSettings, 'useAscii').name('Enable ASCII Render').onChange(toggleAsciiRender);
 
 const globalSettings = { multiplier: 1.0 };
 gui.add(globalSettings, 'multiplier', 0, 3, 0.05).name('Global Intensity');
@@ -166,7 +169,7 @@ const asciiReactivitySettings = {
 const asciiReactivityFolder = gui.addFolder('ASCII Reactivity');
 asciiReactivityFolder.add(asciiReactivitySettings, 'blurIntensity', 0, 5, 0.1).name('Blur Intensity');
 asciiReactivityFolder.add(asciiReactivitySettings, 'saturationIntensity', 0, 3, 0.1).name('Saturation');
-asciiReactivityFolder.add(asciiReactivitySettings, 'enableShake').name('Enable Shake');
+const shakeController = asciiReactivityFolder.add(asciiReactivitySettings, 'enableShake').name('Enable Shake');
 
 // Camera View Snapping
 const cameraViews = {
@@ -181,7 +184,7 @@ cameraFolder.add(cameraViews, 'side').name('Side');
 
 function snapToView(view) {
     controls.reset();
-    controls.target.set(0, 0, 0); // Ensure target is centered
+    controls.target.set(0, 0, 0);
     const distance = 5;
 
     switch(view) {
@@ -199,9 +202,130 @@ function snapToView(view) {
             break;
     }
     camera.lookAt(scene.position);
-    lastInteractionTime = Date.now(); // Reset idle timer
 }
 
+// -- Gamepad Setup --
+let gamepad = null;
+const buttonState = {
+    dpadUp: false, dpadDown: false, dpadLeft: false, dpadRight: false,
+    triangle: false, circle: false
+};
+const spherical = new THREE.Spherical();
+const offset = new THREE.Vector3();
+
+window.addEventListener("gamepadconnected", (event) => {
+  console.log("Gamepad connected:", event.gamepad.id);
+  gamepad = event.gamepad;
+});
+
+window.addEventListener("gamepaddisconnected", (event) => {
+  console.log("Gamepad disconnected:", event.gamepad.id);
+  gamepad = null;
+});
+
+function handleGamepadInput() {
+    if (!gamepad) {
+        return;
+    }
+
+    gamepad = navigator.getGamepads()[gamepad.index];
+    if (!gamepad) return;
+
+    const deadZone = 0.2;
+    let cameraNeedsUpdate = false;
+
+    // --- Button Toggles ---
+    // Triangle (Button 3) to toggle ASCII Render
+    if (gamepad.buttons[3].pressed && !buttonState.triangle) {
+        toggleAsciiRender();
+        buttonState.triangle = true;
+    } else if (!gamepad.buttons[3].pressed) {
+        buttonState.triangle = false;
+    }
+
+    // Circle (Button 1) to toggle ASCII Shake
+    if (gamepad.buttons[1].pressed && !buttonState.circle) {
+        asciiReactivitySettings.enableShake = !asciiReactivitySettings.enableShake;
+        shakeController.updateDisplay();
+        buttonState.circle = true;
+    } else if (!gamepad.buttons[1].pressed) {
+        buttonState.circle = false;
+    }
+
+
+    // Get current camera state for manipulation
+    offset.copy(camera.position).sub(controls.target);
+    spherical.setFromVector3(offset);
+
+    // --- Triggers for Zoom (L2/R2) ---
+    const l2 = gamepad.buttons[6];
+    const r2 = gamepad.buttons[7];
+    if (l2.pressed) {
+        spherical.radius *= 1.05;
+        cameraNeedsUpdate = true;
+    }
+    if (r2.pressed) {
+        spherical.radius *= 0.95;
+        cameraNeedsUpdate = true;
+    }
+
+    // --- Left Joystick for Rotation ---
+    const leftStickX = Math.abs(gamepad.axes[0]) > deadZone ? gamepad.axes[0] : 0;
+    const leftStickY = Math.abs(gamepad.axes[1]) > deadZone ? gamepad.axes[1] : 0;
+    if (leftStickX !== 0 || leftStickY !== 0) {
+        // Increased sensitivity from 0.02 to 0.04
+        spherical.theta -= leftStickX * 0.04;
+        spherical.phi -= leftStickY * 0.04;
+        spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
+        cameraNeedsUpdate = true;
+    }
+
+    // Apply camera changes if any
+    if (cameraNeedsUpdate) {
+        offset.setFromSpherical(spherical);
+        camera.position.copy(controls.target).add(offset);
+    }
+    
+    // --- Right Joystick for Bloom & Intensity ---
+    const rightStickX = Math.abs(gamepad.axes[2]) > deadZone ? gamepad.axes[2] : 0;
+    const rightStickY = Math.abs(gamepad.axes[3]) > deadZone ? gamepad.axes[3] : 0;
+    if (rightStickY !== 0) {
+        postProcessingSettings.bloomStrength -= rightStickY * 0.1;
+        postProcessingSettings.bloomStrength = Math.max(0, Math.min(5, postProcessingSettings.bloomStrength));
+        postProcessingFolder.controllers[0].updateDisplay();
+    }
+    if (rightStickX !== 0) {
+        globalSettings.multiplier += rightStickX * 0.05;
+        globalSettings.multiplier = Math.max(0, Math.min(3, globalSettings.multiplier));
+        gui.controllers[1].updateDisplay();
+    }
+    
+    // --- D-Pad for Snapping ---
+    if (gamepad.buttons[12].pressed && !buttonState.dpadUp) {
+        snapToView('top');
+        buttonState.dpadUp = true;
+    } else if (!gamepad.buttons[12].pressed) {
+        buttonState.dpadUp = false;
+    }
+    if (gamepad.buttons[13].pressed && !buttonState.dpadDown) {
+        snapToView('front');
+        buttonState.dpadDown = true;
+    } else if (!gamepad.buttons[13].pressed) {
+        buttonState.dpadDown = false;
+    }
+    if (gamepad.buttons[14].pressed && !buttonState.dpadLeft) {
+        snapToView('side');
+        buttonState.dpadLeft = true;
+    } else if (!gamepad.buttons[14].pressed) {
+        buttonState.dpadLeft = false;
+    }
+    if (gamepad.buttons[15].pressed && !buttonState.dpadRight) {
+        snapToView('side');
+        buttonState.dpadRight = true;
+    } else if (!gamepad.buttons[15].pressed) {
+        buttonState.dpadRight = false;
+    }
+}
 
 // -- Animation Loop --
 const clock = new THREE.Clock();
@@ -214,9 +338,10 @@ let tempoTime = 0;
 function animate() {
   requestAnimationFrame(animate);
   const deltaTime = clock.getDelta();
-  let idleTime = (Date.now() - lastInteractionTime) / 1000;
   let tempoRatio = 0;
   let asciiTransform = 'translate(-50%, -50%)';
+
+  handleGamepadInput();
 
   if (isPlaying && analyser) {
     analyser.getByteFrequencyData(frequencyData);
@@ -315,8 +440,6 @@ function animate() {
   }
 
   
-  // Always look at the controls target, which might be wobbling
-  camera.lookAt(controls.target);
   controls.update();
   
   // Smoothly return the target to the center
