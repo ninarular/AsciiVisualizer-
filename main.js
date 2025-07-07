@@ -1,15 +1,21 @@
 import * as THREE from 'three';
-// import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'; // Replaced with GLTFLoader
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GUI } from 'lil-gui';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { AsciiEffect } from 'three/examples/jsm/effects/AsciiEffect.js';
 
+// -- Scene, Camera, Renderer Setup --
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('white');
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 5;
 
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// -- HDR Background --
 const rgbeLoader = new RGBELoader();
 rgbeLoader.load('/hdr/background.hdr', function (texture) {
   texture.mapping = THREE.EquirectangularReflectionMapping;
@@ -17,152 +23,162 @@ rgbeLoader.load('/hdr/background.hdr', function (texture) {
   scene.background = texture;
 });
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.z = 5;
+// -- Lighting --
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+scene.add(ambientLight);
+const pointLight = new THREE.PointLight(0xffaa55, 1, 100);
+pointLight.position.set(2, 2, 2);
+scene.add(pointLight);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
 
-const effect = new AsciiEffect(renderer, ' .:-+*=%@#', { invert: true });
-effect.setSize(window.innerWidth, window.innerHeight);
-effect.domElement.style.color = 'white';
-effect.domElement.style.backgroundColor = 'black';
-effect.domElement.style.fontSize = (10 / 1) + 'px';
-effect.domElement.style.position = 'absolute';
-effect.domElement.style.top = '50%';
-effect.domElement.style.left = '50%';
-effect.domElement.style.transform = 'translate(-50%, -50%)';
-let useAscii = false;
-document.body.appendChild(effect.domElement);
-renderer.domElement.style.display = '';      // Show default renderer by default
-effect.domElement.style.display = 'none';    // Hide ASCII renderer initially
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-
+// -- Loading Spinner --
 const loaderDiv = document.createElement('div');
 loaderDiv.id = 'loader';
-loaderDiv.textContent = '';
 loaderDiv.style.position = 'fixed';
 loaderDiv.style.top = '50%';
 loaderDiv.style.left = '50%';
 loaderDiv.style.transform = 'translate(-50%, -50%)';
 loaderDiv.style.width = '50px';
 loaderDiv.style.height = '50px';
-loaderDiv.style.border = '5px solid rgba(0, 0, 0, 0.1)';
-loaderDiv.style.borderTop = '5px solid black';
+loaderDiv.style.border = '5px solid rgba(255, 255, 255, 0.2)';
+loaderDiv.style.borderTop = '5px solid white';
 loaderDiv.style.borderRadius = '50%';
 loaderDiv.style.animation = 'spin 1s linear infinite';
 document.body.appendChild(loaderDiv);
 
-// Add spinner animation style
 const style = document.createElement('style');
-style.textContent = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-`;
+style.textContent = `@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`;
 document.head.appendChild(style);
 
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
 
-const light = new THREE.DirectionalLight('white', 1);
-light.position.set(5, 5, 5);
-scene.add(light);
+// -- Controls --
+let controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); // soft white ambient light
-scene.add(ambientLight);
+// -- ASCII Effect Setup --
+const effect = new AsciiEffect(renderer, ' .:-+*=%@#', { invert: true });
+effect.setSize(window.innerWidth, window.innerHeight);
+effect.domElement.style.color = 'white';
+effect.domElement.style.backgroundColor = 'black';
+effect.domElement.style.position = 'absolute';
+effect.domElement.style.top = '50%';
+effect.domElement.style.left = '50%';
+document.body.appendChild(effect.domElement);
 
-// Point light and visible mesh representation
-const pointLight = new THREE.PointLight(0xffaa55, 1, 100);
-pointLight.position.set(2, 2, 2);
-scene.add(pointLight);
+let useAscii = false;
+renderer.domElement.style.display = 'block';
+effect.domElement.style.display = 'none';
+
+// -- Audio Setup --
+let audioCtx, analyser, sourceNode, frequencyData, audio;
+let isPlaying = false;
+let lastBassLevel = 0;
+
+const fileInputElement = document.createElement('input');
+fileInputElement.type = 'file';
+fileInputElement.id = 'audio-file-input';
+fileInputElement.accept = 'audio/*';
+fileInputElement.style.display = 'none';
+fileInputElement.addEventListener('change', handleFileUpload);
+document.body.appendChild(fileInputElement);
 
 
+function handleFileUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
 
-let object;
+  if (audio) {
+    audio.pause();
+  }
+  
+  audio = new Audio();
+  audio.src = URL.createObjectURL(file);
+  audio.loop = true;
 
-const gltfLoader = new GLTFLoader();
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    frequencyData = new Uint8Array(analyser.frequencyBinCount);
 
-gltfLoader.load('/models/model.glb', (gltf) => {
-  setTimeout(() => {
-    onObjLoad(gltf.scene);
-  }, 2000); // 2 second delay to simulate loading
-}, undefined, (err) => {
-  console.error("Error loading .glb file:", err);
-});
-
-function onObjLoad(obj) {
-  const loader = document.getElementById('loader');
-  if (loader) loader.remove();
-
-  object = obj;
-  object.position.set(0, 0, 0);
-  object.scale.set(1, 1, 1);
-  object.traverse((child) => {
-    if (child.isMesh && child.material) {
-      // Removed line that replaced material with red MeshStandardMaterial
-    }
-  });
-
-  const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-
-  object.position.sub(center); // center the object
-  camera.position.set(center.x, center.y, size.length()); // move camera back based on size
-  // Set zoom distance limits based on model size
-  controls.minDistance = size.length() * 0.5;
-  controls.maxDistance = size.length() * 3;
-  camera.lookAt(center);
-
-  scene.add(object);
-  animate();
+    sourceNode = audioCtx.createMediaElementSource(audio);
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  }
+  
+  audioControls.playPause();
 }
 
+// -- Model Loading --
+let object;
+const gltfLoader = new GLTFLoader();
+gltfLoader.load('/models/model.glb', (gltf) => {
+    setTimeout(() => onObjLoad(gltf.scene), 2000);
+}, undefined, (err) => {
+    console.error("Error loading .glb file:", err);
+    loaderDiv.remove();
+});
+
+function onObjLoad(loadedObject) {
+    loaderDiv.remove();
+    object = loadedObject;
+    scene.add(object);
+}
+
+// -- GUI Setup --
 const gui = new GUI();
 
+const audioControls = {
+  upload: () => fileInputElement.click(),
+  playPause: function() {
+    if (!audio) { console.warn("No audio loaded."); return; }
+    if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+
+    isPlaying = !isPlaying;
+    if (isPlaying) { audio.play(); } else { audio.pause(); }
+    this['Play/Pause'] = isPlaying ? 'Pause' : 'Play';
+    audioFolder.controllers[1].updateDisplay();
+  }
+};
+audioControls['Play/Pause'] = 'Play';
+
+const audioFolder = gui.addFolder('Audio Controls');
+audioFolder.add(audioControls, 'upload').name('Upload Audio');
+audioFolder.add(audioControls, 'playPause').name('Play/Pause');
 
 const asciiSettings = {
   asciiRender: false,
-  resolutionScale: 1,
   webcam: false,
-  widthScale: 1,
-  heightScale: 1
+  resolutionScale: 1.0,
+  widthScale: 1.0,
+  heightScale: 1.0,
 };
 
-gui.add(asciiSettings, 'asciiRender').name('ASCII Render').onChange(val => {
+const asciiFolder = gui.addFolder('ASCII Settings');
+asciiFolder.add(asciiSettings, 'asciiRender').name('ASCII Render').onChange(val => {
   useAscii = val;
-  renderer.domElement.style.display = val ? 'none' : '';
-  effect.domElement.style.display = val ? '' : 'none';
-  controls.domElement = val ? effect.domElement : renderer.domElement;
-
-  if (!val) {
-    renderer.setSize(window.innerWidth, window.innerHeight); // Restore main render resolution
-  }
+  renderer.domElement.style.display = val ? 'none' : 'block';
+  effect.domElement.style.display = val ? 'block' : 'none';
+  
+  controls.dispose();
+  controls = new OrbitControls(camera, val ? effect.domElement : renderer.domElement);
 });
-gui.add(asciiSettings, 'resolutionScale', 0.1, 2).step(0.1).name('ASCII Resolution').onChange(updateAsciiDisplaySize);
-gui.add(asciiSettings, 'widthScale', 0.5, 2).step(0.1).name('Width Scale').onChange(updateAsciiDisplaySize);
-gui.add(asciiSettings, 'heightScale', 0.5, 2).step(0.1).name('Height Scale').onChange(updateAsciiDisplaySize);
-gui.add(asciiSettings, 'webcam').name('Use Webcam for ASCII').onChange(toggleWebcamAscii);
+asciiFolder.add(asciiSettings, 'resolutionScale', 0.1, 2).step(0.1).name('ASCII Resolution').onChange(updateAsciiDisplaySize);
+asciiFolder.add(asciiSettings, 'widthScale', 0.5, 2).step(0.1).name('Width Scale').onChange(updateAsciiDisplaySize);
+asciiFolder.add(asciiSettings, 'heightScale', 0.5, 2).step(0.1).name('Height Scale').onChange(updateAsciiDisplaySize);
+asciiFolder.add(asciiSettings, 'webcam').name('Use Webcam for ASCII').onChange(toggleWebcamAscii);
+
 
 function updateAsciiDisplaySize() {
   const width = window.innerWidth * asciiSettings.widthScale;
   const height = window.innerHeight * asciiSettings.heightScale;
   effect.setSize(width * asciiSettings.resolutionScale, height * asciiSettings.resolutionScale);
   effect.domElement.style.fontSize = (10 / asciiSettings.resolutionScale) + 'px';
-  effect.domElement.style.position = 'absolute';
-  effect.domElement.style.top = '50%';
-  effect.domElement.style.left = '50%';
-  effect.domElement.style.transform = 'translate(-50%, -50%)';
 }
+updateAsciiDisplaySize();
 
-let videoStream = null;
-let videoTexture = null;
-let videoPlane = null;
-
+// -- Webcam Functionality --
+let videoStream, videoTexture, videoPlane;
 async function toggleWebcamAscii(useWebcam) {
   if (useWebcam) {
     try {
@@ -177,44 +193,18 @@ async function toggleWebcamAscii(useWebcam) {
       videoPlane = new THREE.Mesh(geometry, material);
       scene.add(videoPlane);
 
-      if (object) scene.remove(object);
+      if (object) object.visible = false;
     } catch (err) {
       console.error('Webcam access failed:', err);
     }
   } else {
-    if (videoPlane) {
-      scene.remove(videoPlane);
-      videoPlane = null;
-    }
-    if (videoStream) {
-      videoStream.getTracks().forEach(track => track.stop());
-      videoStream = null;
-    }
-    if (object) scene.add(object);
+    if (videoPlane) { scene.remove(videoPlane); videoPlane = null; }
+    if (videoStream) { videoStream.getTracks().forEach(track => track.stop()); videoStream = null; }
+    if (object) object.visible = true;
   }
 }
 
-function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  if (useAscii) {
-    effect.render(scene, camera);
-  } else {
-    renderer.render(scene, camera);
-  }
-}
-
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  updateAsciiDisplaySize();
-  if (videoPlane) {
-    videoPlane.geometry.dispose();
-    videoPlane.geometry = new THREE.PlaneGeometry(window.innerWidth / 100, window.innerHeight / 100);
-  }
-});
-
+// -- Footer --
 const footerText = document.createElement('div');
 footerText.textContent = 'pee pee poo poo';
 footerText.style.position = 'fixed';
@@ -225,3 +215,62 @@ footerText.style.color = 'white';
 footerText.style.fontFamily = 'Times New Roman, serif';
 footerText.style.fontSize = '16px';
 document.body.appendChild(footerText);
+
+// -- Animation Loop --
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+
+  // **FIX: Start with a base transform for centering**
+  let currentTransform = 'translate(-50%, -50%)';
+
+  if (analyser && useAscii && isPlaying && !asciiSettings.webcam) {
+    analyser.getByteFrequencyData(frequencyData);
+
+    const bass = frequencyData.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
+    const treble = frequencyData.slice(41, 100).reduce((a, b) => a + b, 0) / 59;
+    
+    const blurAmount = Math.max(0, (40 / (bass + 1)) - 0.3);
+    const saturationAmount = 1 + (treble / 255);
+    effect.domElement.style.filter = `blur(${blurAmount}px) saturate(${saturationAmount})`;
+
+    const bassHit = bass > lastBassLevel + 25 && bass > 140;
+    lastBassLevel = bass;
+
+    if (bassHit) {
+      effect.domElement.style.fontWeight = 'bold';
+      // **FIX: Append shake to the current transform**
+      const shakeX = (Math.random() - 0.5) * 15;
+      const shakeY = (Math.random() - 0.5) * 15;
+      currentTransform += ` translate(${shakeX}px, ${shakeY}px)`;
+    } else {
+      effect.domElement.style.fontWeight = 'normal';
+    }
+
+  } else {
+    effect.domElement.style.fontWeight = 'normal';
+    effect.domElement.style.filter = 'none';
+  }
+
+  // **FIX: Apply the combined transform at the end**
+  effect.domElement.style.transform = currentTransform;
+
+  if (useAscii) {
+    effect.render(scene, camera);
+  } else {
+    renderer.render(scene, camera);
+  }
+}
+animate();
+
+// -- Window Resize Handling --
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    updateAsciiDisplaySize();
+    if (videoPlane) {
+        videoPlane.geometry.dispose();
+        videoPlane.geometry = new THREE.PlaneGeometry(window.innerWidth / 100, window.innerHeight / 100);
+    }
+});

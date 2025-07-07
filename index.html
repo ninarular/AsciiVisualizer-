@@ -2,20 +2,38 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>OBJ Viewer</title>
+    <title>3D Model Viewer with Audio Reactivity</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       body {
         margin: 0;
-        background-color: white;
+        background-color: black; /* Changed for better HDR visibility */
         overflow: hidden;
       }
       canvas {
         display: block;
       }
+      /* Simple style for the upload button */
+      .upload-btn {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 10;
+        padding: 10px 15px;
+        background-color: #333;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-family: sans-serif;
+      }
+      #audio-file-input {
+        display: none;
+      }
     </style>
   </head>
   <body>
+    <input type="file" id="audio-file-input" accept="audio/*" />
     <script type="module" src="/main.js"></script>
   </body>
 </html>
